@@ -7,6 +7,5 @@
   "scripts": {
     "start": "node --experimental-strip-types src/http/server.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts"
-  },
-  "engines": { "node": ">=22.12" }
+  }
 }
