@@ -21,5 +21,6 @@ export type SensorSample = {
 export type LeakEvidence = {
   detectorId: string; sourceEventId: string; observedAt: string;
   logLikelihoodRatio: number; uncertainty: number; locationM: number;
-  correlationGroup?: string; quality?: 'good' | 'suspect';
+  correlationGroup?: string; quality?: 'good' | 'suspect' | 'invalid';
+  eventWindow?: string | number;
 };
