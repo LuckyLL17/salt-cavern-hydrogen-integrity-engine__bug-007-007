@@ -55,6 +55,76 @@ test('reused leak evidence is grouped once', () => {
     { detectorId: 'pressure-residual', sourceEventId: 'raw-1', observedAt: '2026-01-01T00:00:00Z', logLikelihoodRatio: 1.8, uncertainty: 1.2, locationM: 102 },
   ]);
   assert.equal(result.evidenceGroups, 1);
+  assert.equal(result.usedDetectorIds[0], 'mass-balance');
+  assert.equal(result.locationM, 100);
+});
+
+test('correlated evidence in overlapping windows is independent of order and window notation', () => {
+  const evidence = [
+    { detectorId: 'mass-balance', sourceEventId: 'raw-1', observedAt: '2026-01-01T00:00:00Z', logLikelihoodRatio: 2, uncertainty: 1, locationM: 100, eventWindow: '2026-01-01T00:00:00Z,2026-01-01T00:15:00Z' },
+    { detectorId: 'pressure-residual', sourceEventId: 'raw-1', observedAt: '2026-01-01T00:05:00Z', logLikelihoodRatio: 1.8, uncertainty: 1.2, locationM: 102, eventWindow: '2026-01-01T00:05:00Z/2026-01-01T00:20:00Z' },
+    { detectorId: 'duplicate-residual', sourceEventId: 'raw-1', observedAt: '2026-01-01T00:06:00Z', logLikelihoodRatio: 1.7, uncertainty: 1.2, locationM: 102, eventWindow: '2026-01-01T00:06:00Z:2026-01-01T00:21:00Z' },
+    { detectorId: 'acoustic', sourceEventId: 'raw-2', observedAt: '2026-01-01T01:00:00Z', logLikelihoodRatio: 1, uncertainty: 1, locationM: 120 },
+  ];
+  const first = fuseLeakEvidence(evidence);
+  const reversed = fuseLeakEvidence([...evidence].reverse());
+  assert.equal(first.evidenceGroups, 2);
+  assert.deepEqual(first, reversed);
+  assert.deepEqual(first.usedDetectorIds, ['mass-balance', 'acoustic']);
+});
+
+test('only overlapping windows from one correlated group are fused once', () => {
+  const make = (start: string, end: string, detectorId: string, ratio: number) => ({
+    detectorId, sourceEventId: 'raw-1', observedAt: start, logLikelihoodRatio: ratio, uncertainty: 1, locationM: 100,
+    eventWindow: { start, end },
+  });
+  const priorLogOdds = Math.log(0.01 / 0.99);
+  const adjacent = fuseLeakEvidence([
+    make('2026-01-01T00:00:00Z', '2026-01-01T00:15:00Z', 'a', 2),
+    make('2026-01-01T00:15:00Z', '2026-01-01T00:30:00Z', 'b', 1),
+  ]);
+  const overlapping = fuseLeakEvidence([
+    make('2026-01-01T00:00:00Z', '2026-01-01T00:15:00Z', 'a', 2),
+    make('2026-01-01T00:14:59Z', '2026-01-01T00:30:00Z', 'b', 1),
+  ]);
+  assert.equal(adjacent.evidenceGroups, 2);
+  assert.ok(Math.abs(adjacent.probability - 1 / (1 + Math.exp(-(priorLogOdds + 3)))) < 1e-12);
+  assert.equal(overlapping.evidenceGroups, 1);
+  assert.ok(Math.abs(overlapping.probability - 1 / (1 + Math.exp(-(priorLogOdds + 2)))) < 1e-12);
+});
+
+test('non-overlapping label windows with equal coarse prefix stay independent', () => {
+  const result = fuseLeakEvidence([
+    { detectorId: 'a', sourceEventId: 'raw-1', observedAt: '2026-01-01T00:00:00Z', logLikelihoodRatio: 2, uncertainty: 1, locationM: 100, eventWindow: 'shift-a/window-1' },
+    { detectorId: 'b', sourceEventId: 'raw-1', observedAt: '2026-01-02T00:00:00Z', logLikelihoodRatio: 1, uncertainty: 1, locationM: 110, eventWindow: 'shift-a/window-2' },
+  ]);
+  assert.equal(result.evidenceGroups, 2);
+});
+
+test('quality is applied once per correlated evidence group', () => {
+  const good = fuseLeakEvidence([
+    { detectorId: 'a', sourceEventId: 'raw-1', observedAt: '2026-01-01T00:00:00Z', logLikelihoodRatio: 2, uncertainty: 1, locationM: 100, eventWindow: '2026-01-01T00:00:00Z/PT15M' },
+    { detectorId: 'b', sourceEventId: 'raw-1', observedAt: '2026-01-01T00:05:00Z', logLikelihoodRatio: 1.9, uncertainty: 1, locationM: 110, eventWindow: '2026-01-01T00:05:00Z/PT15M', quality: 'suspect' },
+  ]);
+  const suspect = fuseLeakEvidence([
+    { detectorId: 'a', sourceEventId: 'raw-1', observedAt: '2026-01-01T00:00:00Z', logLikelihoodRatio: 1.9, uncertainty: 1, locationM: 100, eventWindow: '2026-01-01T00:00:00Z/PT15M', quality: 'suspect' },
+    { detectorId: 'b', sourceEventId: 'raw-1', observedAt: '2026-01-01T00:05:00Z', logLikelihoodRatio: 1.8, uncertainty: 1, locationM: 100, eventWindow: '2026-01-01T00:05:00Z/PT15M', quality: 'suspect' },
+  ]);
+  const invalid = fuseLeakEvidence([
+    { detectorId: 'a', sourceEventId: 'raw-1', observedAt: '2026-01-01T00:00:00Z', logLikelihoodRatio: 1.9, uncertainty: 1, locationM: 100, eventWindow: '2026-01-01T00:00:00Z/PT15M', quality: 'invalid' },
+  ]);
+  const priorLogOdds = Math.log(0.01 / 0.99);
+  assert.ok(Math.abs(good.probability - 1 / (1 + Math.exp(-(priorLogOdds + 2)))) < 1e-12);
+  assert.equal(good.locationM, 100);
+  assert.ok(Math.abs(suspect.probability - 1 / (1 + Math.exp(-(priorLogOdds + 1.9 * 0.25)))) < 1e-12);
+  assert.ok(Math.abs(invalid.probability - 0.01) < 1e-12);
+  const mixed = fuseLeakEvidence([
+    { detectorId: 'strong-invalid', sourceEventId: 'raw-2', observedAt: '2026-01-01T00:00:00Z', logLikelihoodRatio: 5, uncertainty: 1, locationM: 100, eventWindow: '2026-01-01T00:00:00Z/PT15M', quality: 'invalid' },
+    { detectorId: 'weak-valid', sourceEventId: 'raw-2', observedAt: '2026-01-01T00:01:00Z', logLikelihoodRatio: 1, uncertainty: 1, locationM: 101, eventWindow: '2026-01-01T00:01:00Z/PT15M', quality: 'good' },
+  ]);
+  assert.ok(Math.abs(mixed.probability - 0.01) < 1e-12);
+  assert.equal(mixed.locationM, 0);
+  assert.deepEqual(mixed.usedDetectorIds, ['strong-invalid']);
 });
 
 test('uncertainty samples are reproducible for a fixed seed', () => {

@@ -18,8 +18,10 @@ export type SensorSample = {
   sensorId: string; observedAt: string; value: number;
   quality: 'good' | 'suspect' | 'invalid'; unit: string;
 };
+export type LeakEvidenceQuality = 'good' | 'suspect' | 'invalid';
 export type LeakEvidence = {
   detectorId: string; sourceEventId: string; observedAt: string;
   logLikelihoodRatio: number; uncertainty: number; locationM: number;
-  correlationGroup?: string; quality?: 'good' | 'suspect';
+  correlationGroup?: string; quality?: LeakEvidenceQuality;
+  eventWindow?: number | string | { start: number | string; end: number | string };
 };
